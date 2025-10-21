@@ -1,17 +1,7 @@
 import streamlit as st
 import pandas as pd
-import tabula
+import pdfplumber
 import io
-from openpyxl import Workbook
-from openpyxl.utils.dataframe import dataframe_to_rows
-import subprocess
-import sys
-
-# Install java if not present (for Streamlit Cloud)
-try:
-    subprocess.run(['java', '-version'], capture_output=True, check=True)
-except:
-    st.error("Java is required but not found. Please contact the administrator.")
 
 st.set_page_config(page_title="PDF to Excel Converter", layout="wide")
 
@@ -34,21 +24,33 @@ if uploaded_file is not None:
     try:
         # Read PDF and extract tables
         with st.spinner("Reading PDF file..."):
-            # Save uploaded file temporarily
             pdf_bytes = uploaded_file.read()
             
-            # Use tabula to read PDF tables
-            tables = tabula.read_pdf(io.BytesIO(pdf_bytes), pages='all', multiple_tables=True)
+            # Use pdfplumber to read PDF tables
+            tables = []
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages:
+                    page_tables = page.extract_tables()
+                    if page_tables:
+                        for table in page_tables:
+                            if table and len(table) > 1:  # Must have header and at least one row
+                                # Convert to DataFrame
+                                df_temp = pd.DataFrame(table[1:], columns=table[0])
+                                # Remove empty columns
+                                df_temp = df_temp.loc[:, (df_temp != '').any(axis=0)]
+                                if not df_temp.empty:
+                                    tables.append(df_temp)
             
             if len(tables) == 0:
                 st.error("No tables found in the PDF file.")
+                st.info("Make sure the PDF contains tables with clear structure.")
             else:
                 # If multiple tables, let user select one
                 if len(tables) > 1:
                     st.info(f"Found {len(tables)} tables in the PDF.")
                     table_idx = st.selectbox("Select a table to process:", 
                                             range(len(tables)), 
-                                            format_func=lambda x: f"Table {x+1}")
+                                            format_func=lambda x: f"Table {x+1} ({len(tables[x])} rows, {len(tables[x].columns)} columns)")
                     st.session_state.df = tables[table_idx]
                 else:
                     st.session_state.df = tables[0]
@@ -93,12 +95,11 @@ if st.session_state.df is not None:
     if st.session_state.selected_columns:
         st.header("Step 3: Reorder Columns")
         
-        st.write("Drag and drop to reorder columns (or use the interface below):")
+        st.write("Use the ↑ and ↓ buttons to reorder columns:")
         
         # Create a simple reordering interface
         current_order = st.session_state.selected_columns.copy()
         
-        reordered_columns = []
         for i, col in enumerate(current_order):
             col1, col2, col3 = st.columns([3, 1, 1])
             with col1:
