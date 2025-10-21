@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import pypdf
 from pypdf import PdfReader
 import re
 
