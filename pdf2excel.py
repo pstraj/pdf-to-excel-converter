@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
-import pdfplumber
 import io
+from pypdf import PdfReader
+import re
 
 st.set_page_config(page_title="PDF to Excel Converter", layout="wide")
 
@@ -26,40 +27,67 @@ if uploaded_file is not None:
         with st.spinner("Reading PDF file..."):
             pdf_bytes = uploaded_file.read()
             
-            # Use pdfplumber to read PDF tables
-            tables = []
-            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-                for page in pdf.pages:
-                    page_tables = page.extract_tables()
-                    if page_tables:
-                        for table in page_tables:
-                            if table and len(table) > 1:  # Must have header and at least one row
-                                # Convert to DataFrame
-                                df_temp = pd.DataFrame(table[1:], columns=table[0])
-                                # Remove empty columns
-                                df_temp = df_temp.loc[:, (df_temp != '').any(axis=0)]
-                                if not df_temp.empty:
-                                    tables.append(df_temp)
+            # Try to extract text and parse as CSV/table
+            reader = PdfReader(io.BytesIO(pdf_bytes))
             
-            if len(tables) == 0:
-                st.error("No tables found in the PDF file.")
-                st.info("Make sure the PDF contains tables with clear structure.")
+            # Extract text from all pages
+            text_data = []
+            for page in reader.pages:
+                text = page.extract_text()
+                if text:
+                    text_data.append(text)
+            
+            if not text_data:
+                st.error("Could not extract text from PDF. The PDF might be image-based or encrypted.")
             else:
-                # If multiple tables, let user select one
-                if len(tables) > 1:
-                    st.info(f"Found {len(tables)} tables in the PDF.")
-                    table_idx = st.selectbox("Select a table to process:", 
-                                            range(len(tables)), 
-                                            format_func=lambda x: f"Table {x+1} ({len(tables[x])} rows, {len(tables[x].columns)} columns)")
-                    st.session_state.df = tables[table_idx]
-                else:
-                    st.session_state.df = tables[0]
+                # Combine all text
+                full_text = "\n".join(text_data)
                 
-                st.success("PDF file loaded successfully!")
+                # Try to parse as table (looking for tabular data)
+                lines = full_text.split('\n')
+                
+                # Simple heuristic: find lines that look like table rows
+                table_lines = [line.strip() for line in lines if line.strip()]
+                
+                if len(table_lines) < 2:
+                    st.error("Could not find table structure in PDF.")
+                else:
+                    # Ask user to specify delimiter
+                    st.info("Attempting to parse table from PDF text...")
+                    
+                    # Try common delimiters
+                    delimiter = st.selectbox("If the preview looks incorrect, try a different delimiter:", 
+                                            [None, ",", ";", "|", "\t", "  "], 
+                                            format_func=lambda x: "Auto-detect" if x is None else f"'{x}'")
+                    
+                    if delimiter is None:
+                        # Auto-detect: try to split by multiple spaces
+                        header = re.split(r'\s{2,}', table_lines[0])
+                        data_rows = [re.split(r'\s{2,}', line) for line in table_lines[1:]]
+                    else:
+                        header = table_lines[0].split(delimiter)
+                        data_rows = [line.split(delimiter) for line in table_lines[1:]]
+                    
+                    # Clean up header
+                    header = [h.strip() for h in header if h.strip()]
+                    
+                    # Filter rows that match header length
+                    valid_rows = []
+                    for row in data_rows:
+                        row_clean = [cell.strip() for cell in row]
+                        if len(row_clean) == len(header):
+                            valid_rows.append(row_clean)
+                    
+                    if valid_rows:
+                        df_temp = pd.DataFrame(valid_rows, columns=header)
+                        st.session_state.df = df_temp
+                        st.success(f"PDF file loaded successfully! Found {len(valid_rows)} rows.")
+                    else:
+                        st.error("Could not parse table structure. Please try a different delimiter or upload a CSV/Excel file instead.")
                 
     except Exception as e:
         st.error(f"Error reading PDF: {str(e)}")
-        st.info("Make sure the PDF contains tables with clear structure.")
+        st.info("Tip: For best results, try converting your PDF to CSV or Excel first, or use a PDF with clear table structure.")
 
 # Step 2: Display columns and selection
 if st.session_state.df is not None:
@@ -95,29 +123,51 @@ if st.session_state.df is not None:
     if st.session_state.selected_columns:
         st.header("Step 3: Reorder Columns")
         
-        st.write("Use the ↑ and ↓ buttons to reorder columns:")
+        st.write("Drag column names to reorder them (or use the dropdowns below):")
         
-        # Create a simple reordering interface
-        current_order = st.session_state.selected_columns.copy()
+        # Show current order
+        st.info(f"Current order: {' → '.join(st.session_state.selected_columns)}")
         
-        for i, col in enumerate(current_order):
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                st.write(f"{i+1}. {col}")
-            with col2:
-                if i > 0:
-                    if st.button("↑", key=f"up_{i}"):
-                        current_order[i], current_order[i-1] = current_order[i-1], current_order[i]
-                        st.session_state.selected_columns = current_order
-                        st.rerun()
-            with col3:
-                if i < len(current_order) - 1:
-                    if st.button("↓", key=f"down_{i}"):
-                        current_order[i], current_order[i+1] = current_order[i+1], current_order[i]
-                        st.session_state.selected_columns = current_order
-                        st.rerun()
+        # Initialize column order if not set
+        if 'column_order' not in st.session_state or set(st.session_state.column_order) != set(st.session_state.selected_columns):
+            st.session_state.column_order = st.session_state.selected_columns.copy()
         
-        st.session_state.column_order = current_order
+        # Create a reordering interface using selectboxes
+        reordered = []
+        available_cols = st.session_state.selected_columns.copy()
+        
+        st.write("**Select columns in the desired order:**")
+        
+        for position in range(len(st.session_state.selected_columns)):
+            col_label, col_selector = st.columns([1, 4])
+            
+            with col_label:
+                st.write(f"**Position {position + 1}:**")
+            
+            with col_selector:
+                # Default to maintaining current order if it exists
+                if position < len(st.session_state.column_order):
+                    default_col = st.session_state.column_order[position]
+                    if default_col in available_cols:
+                        default_idx = available_cols.index(default_col)
+                    else:
+                        default_idx = 0
+                else:
+                    default_idx = 0
+                
+                selected = st.selectbox(
+                    f"pos_{position}",
+                    available_cols,
+                    index=default_idx,
+                    key=f"col_order_{position}",
+                    label_visibility="collapsed"
+                )
+                
+                reordered.append(selected)
+                available_cols.remove(selected)
+        
+        # Update the column order in session state
+        st.session_state.column_order = reordered
         
         # Step 4: Preview and Download
         st.header("Step 4: Download Excel File")
