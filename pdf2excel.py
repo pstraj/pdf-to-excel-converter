@@ -1,9 +1,7 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
 import io
-import pypdf
-from pypdf import PdfReader
-import re
 
 st.set_page_config(page_title="PDF to Excel Converter", layout="wide")
 
@@ -25,70 +23,82 @@ uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
 if uploaded_file is not None:
     try:
         # Read PDF and extract tables
-        with st.spinner("Reading PDF file..."):
+        with st.spinner("Reading PDF and extracting tables..."):
             pdf_bytes = uploaded_file.read()
             
-            # Try to extract text and parse as CSV/table
-            reader = PdfReader(io.BytesIO(pdf_bytes))
+            # Use pdfplumber to extract tables
+            tables = []
+            with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                for page_num, page in enumerate(pdf.pages, 1):
+                    # Extract tables from the page
+                    page_tables = page.extract_tables()
+                    
+                    if page_tables:
+                        for table_num, table in enumerate(page_tables, 1):
+                            if table and len(table) > 1:  # Must have header and at least one data row
+                                # First row is header
+                                headers = table[0]
+                                data_rows = table[1:]
+                                
+                                # Clean headers - remove None and empty strings
+                                cleaned_headers = []
+                                for i, h in enumerate(headers):
+                                    if h and str(h).strip():
+                                        cleaned_headers.append(str(h).strip())
+                                    else:
+                                        cleaned_headers.append(f"Column_{i+1}")
+                                
+                                # Create DataFrame
+                                try:
+                                    df_temp = pd.DataFrame(data_rows, columns=cleaned_headers)
+                                    
+                                    # Remove completely empty rows
+                                    df_temp = df_temp.dropna(how='all')
+                                    
+                                    # Remove completely empty columns
+                                    df_temp = df_temp.dropna(axis=1, how='all')
+                                    
+                                    if not df_temp.empty and len(df_temp.columns) > 0:
+                                        tables.append({
+                                            'df': df_temp,
+                                            'page': page_num,
+                                            'table_num': table_num,
+                                            'rows': len(df_temp),
+                                            'cols': len(df_temp.columns)
+                                        })
+                                except Exception as e:
+                                    st.warning(f"Could not parse table {table_num} on page {page_num}: {str(e)}")
             
-            # Extract text from all pages
-            text_data = []
-            for page in reader.pages:
-                text = page.extract_text()
-                if text:
-                    text_data.append(text)
-            
-            if not text_data:
-                st.error("Could not extract text from PDF. The PDF might be image-based or encrypted.")
+            if len(tables) == 0:
+                st.error("❌ No tables found in the PDF file.")
+                st.info("**Tips:**\n- Make sure your PDF contains tables with clear rows and columns\n- The PDF should not be a scanned image\n- Tables should have visible borders or clear structure")
             else:
-                # Combine all text
-                full_text = "\n".join(text_data)
+                st.success(f"✅ Found {len(tables)} table(s) in the PDF!")
                 
-                # Try to parse as table (looking for tabular data)
-                lines = full_text.split('\n')
-                
-                # Simple heuristic: find lines that look like table rows
-                table_lines = [line.strip() for line in lines if line.strip()]
-                
-                if len(table_lines) < 2:
-                    st.error("Could not find table structure in PDF.")
+                # If multiple tables, let user select one
+                if len(tables) > 1:
+                    st.subheader("Multiple Tables Found")
+                    
+                    # Create selection options
+                    table_options = [
+                        f"Page {t['page']}, Table {t['table_num']} ({t['rows']} rows × {t['cols']} columns)"
+                        for t in tables
+                    ]
+                    
+                    selected_table_idx = st.selectbox(
+                        "Select a table to process:",
+                        range(len(tables)),
+                        format_func=lambda x: table_options[x]
+                    )
+                    
+                    st.session_state.df = tables[selected_table_idx]['df']
                 else:
-                    # Ask user to specify delimiter
-                    st.info("Attempting to parse table from PDF text...")
-                    
-                    # Try common delimiters
-                    delimiter = st.selectbox("If the preview looks incorrect, try a different delimiter:", 
-                                            [None, ",", ";", "|", "\t", "  "], 
-                                            format_func=lambda x: "Auto-detect" if x is None else f"'{x}'")
-                    
-                    if delimiter is None:
-                        # Auto-detect: try to split by multiple spaces
-                        header = re.split(r'\s{2,}', table_lines[0])
-                        data_rows = [re.split(r'\s{2,}', line) for line in table_lines[1:]]
-                    else:
-                        header = table_lines[0].split(delimiter)
-                        data_rows = [line.split(delimiter) for line in table_lines[1:]]
-                    
-                    # Clean up header
-                    header = [h.strip() for h in header if h.strip()]
-                    
-                    # Filter rows that match header length
-                    valid_rows = []
-                    for row in data_rows:
-                        row_clean = [cell.strip() for cell in row]
-                        if len(row_clean) == len(header):
-                            valid_rows.append(row_clean)
-                    
-                    if valid_rows:
-                        df_temp = pd.DataFrame(valid_rows, columns=header)
-                        st.session_state.df = df_temp
-                        st.success(f"PDF file loaded successfully! Found {len(valid_rows)} rows.")
-                    else:
-                        st.error("Could not parse table structure. Please try a different delimiter or upload a CSV/Excel file instead.")
+                    st.session_state.df = tables[0]['df']
+                    st.info(f"Table found on page {tables[0]['page']} with {tables[0]['rows']} rows and {tables[0]['cols']} columns")
                 
     except Exception as e:
-        st.error(f"Error reading PDF: {str(e)}")
-        st.info("Tip: For best results, try converting your PDF to CSV or Excel first, or use a PDF with clear table structure.")
+        st.error(f"❌ Error reading PDF: {str(e)}")
+        st.info("**Please ensure:**\n- The file is a valid PDF\n- The PDF contains tables (not just text or images)\n- The PDF is not password protected")
 
 # Step 2: Display columns and selection
 if st.session_state.df is not None:
