@@ -27,7 +27,7 @@ if uploaded_file is not None:
             pdf_bytes = uploaded_file.read()
             
             # Use pdfplumber to extract tables
-            tables = []
+            all_tables = []
             with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
                 for page_num, page in enumerate(pdf.pages, 1):
                     # Extract tables from the page
@@ -59,42 +59,77 @@ if uploaded_file is not None:
                                     df_temp = df_temp.dropna(axis=1, how='all')
                                     
                                     if not df_temp.empty and len(df_temp.columns) > 0:
-                                        tables.append({
+                                        all_tables.append({
                                             'df': df_temp,
                                             'page': page_num,
                                             'table_num': table_num,
                                             'rows': len(df_temp),
-                                            'cols': len(df_temp.columns)
+                                            'cols': len(df_temp.columns),
+                                            'headers': list(df_temp.columns)
                                         })
                                 except Exception as e:
                                     st.warning(f"Could not parse table {table_num} on page {page_num}: {str(e)}")
             
-            if len(tables) == 0:
+            if len(all_tables) == 0:
                 st.error("❌ No tables found in the PDF file.")
                 st.info("**Tips:**\n- Make sure your PDF contains tables with clear rows and columns\n- The PDF should not be a scanned image\n- Tables should have visible borders or clear structure")
             else:
-                st.success(f"✅ Found {len(tables)} table(s) in the PDF!")
+                st.success(f"✅ Found {len(all_tables)} table(s) across {len(pdf.pages)} page(s)!")
                 
-                # If multiple tables, let user select one
-                if len(tables) > 1:
-                    st.subheader("Multiple Tables Found")
+                # Option to merge tables or select individual table
+                if len(all_tables) > 1:
+                    st.subheader("Table Processing Options")
                     
-                    # Create selection options
-                    table_options = [
-                        f"Page {t['page']}, Table {t['table_num']} ({t['rows']} rows × {t['cols']} columns)"
-                        for t in tables
-                    ]
-                    
-                    selected_table_idx = st.selectbox(
-                        "Select a table to process:",
-                        range(len(tables)),
-                        format_func=lambda x: table_options[x]
+                    merge_option = st.radio(
+                        "How would you like to process the tables?",
+                        ["Merge all tables into one", "Select a specific table"],
+                        index=0
                     )
                     
-                    st.session_state.df = tables[selected_table_idx]['df']
+                    if merge_option == "Merge all tables into one":
+                        # Check if all tables have the same columns
+                        first_headers = set(all_tables[0]['headers'])
+                        same_structure = all([set(t['headers']) == first_headers for t in all_tables])
+                        
+                        if same_structure:
+                            # Merge all tables
+                            merged_df = pd.concat([t['df'] for t in all_tables], ignore_index=True)
+                            st.session_state.df = merged_df
+                            
+                            total_rows = sum(t['rows'] for t in all_tables)
+                            st.info(f"✅ Merged {len(all_tables)} tables into one table with {total_rows} total rows")
+                        else:
+                            st.warning("⚠️ Tables have different column structures. Attempting to merge with all columns...")
+                            
+                            # Show column differences
+                            with st.expander("View column differences"):
+                                for i, t in enumerate(all_tables):
+                                    st.write(f"**Page {t['page']}, Table {t['table_num']}:** {', '.join(t['headers'])}")
+                            
+                            # Merge with all columns (will have NaN for missing columns)
+                            merged_df = pd.concat([t['df'] for t in all_tables], ignore_index=True, sort=False)
+                            st.session_state.df = merged_df
+                            
+                            st.info(f"ℹ️ Merged {len(all_tables)} tables. Missing columns will show as empty cells.")
+                    
+                    else:
+                        # Let user select a specific table
+                        table_options = [
+                            f"Page {t['page']}, Table {t['table_num']} ({t['rows']} rows × {t['cols']} columns)"
+                            for t in all_tables
+                        ]
+                        
+                        selected_table_idx = st.selectbox(
+                            "Select a table to process:",
+                            range(len(all_tables)),
+                            format_func=lambda x: table_options[x]
+                        )
+                        
+                        st.session_state.df = all_tables[selected_table_idx]['df']
                 else:
-                    st.session_state.df = tables[0]['df']
-                    st.info(f"Table found on page {tables[0]['page']} with {tables[0]['rows']} rows and {tables[0]['cols']} columns")
+                    # Only one table found
+                    st.session_state.df = all_tables[0]['df']
+                    st.info(f"Table found on page {all_tables[0]['page']} with {all_tables[0]['rows']} rows and {all_tables[0]['cols']} columns")
                 
     except Exception as e:
         st.error(f"❌ Error reading PDF: {str(e)}")
