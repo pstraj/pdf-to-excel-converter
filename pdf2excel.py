@@ -18,7 +18,6 @@ if 'column_order' not in st.session_state:
 
 # Step 1: File Upload
 st.header("Step 1: Upload PDF File")
-st.footer("Prashanth Rajashekar")
 uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
 
 if uploaded_file is not None:
@@ -263,3 +262,12 @@ with st.sidebar:
     
     **Tip:** For best results, use PDFs with well-structured tables.
     """)
+    
+    # Footer
+    st.markdown("---")
+    st.markdown(
+        "<div style='text-align: center; color: #666; font-size: 0.9em;'>"
+        "Created by<br><strong>Prashanth Rajashekar</strong>"
+        "</div>",
+        unsafe_allow_html=True
+    )
