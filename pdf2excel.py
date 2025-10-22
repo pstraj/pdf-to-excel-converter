@@ -18,6 +18,7 @@ if 'column_order' not in st.session_state:
 
 # Step 1: File Upload
 st.header("Step 1: Upload PDF File")
+st.footer("Prashanth Rajashekar")
 uploaded_file = st.file_uploader("Choose a PDF file", type=['pdf'])
 
 if uploaded_file is not None:
