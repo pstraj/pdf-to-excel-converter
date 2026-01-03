@@ -223,7 +223,15 @@ if st.session_state.df is not None:
         
         st.subheader("Final Preview")
         st.dataframe(final_df.head(10), use_container_width=True)
-        st.info(f"Total rows: {len(final_df)}, Total columns: {len(final_df.columns)}")
+        
+        # Show summary in a colored box
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Total Rows", len(final_df))
+        with col2:
+            st.metric("Total Columns", len(final_df.columns))
+        
+        st.markdown("---")
         
         # Convert to Excel
         output = io.BytesIO()
@@ -232,16 +240,20 @@ if st.session_state.df is not None:
         
         excel_data = output.getvalue()
         
-        # Download button
-        st.download_button(
-            label="📥 Download Excel File",
-            data=excel_data,
-            file_name="converted_data.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+        # Download button with prominent styling
+        st.markdown("### 📥 Your Excel file is ready!")
         
-        st.success("Your Excel file is ready for download!")
+        col1, col2, col3 = st.columns([1, 2, 1])
+        with col2:
+            st.download_button(
+                label="⬇️ Download Excel File",
+                data=excel_data,
+                file_name="converted_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+        
+        st.success("✅ Click the button above to download your Excel file!")
     else:
         st.warning("Please select at least one column to proceed.")
 
